@@ -66,8 +66,9 @@
 # Here is a complete list of configuration parameters:
 #
 # ENERGIACONST The Energia/Arduino software version, as an integer, used to define the
-#              ARDUINO/ENERGIA version constant. This defaults to 100 if undefined.
+#              ARDUINO/ENERGIA version constant. This defaults to 101 if undefined.
 #
+# BOARDFAMILY  this can be msp430 or lm4f (default)
 #
 #
 # ENERGIADIR   The path where the Arduino software is installed on your system.
@@ -120,13 +121,16 @@
 ifndef ENERGIADIR
 ENERGIADIR := $(firstword $(wildcard ~/energia /usr/share/energia))
 endif
-ifeq "$(wildcard $(ENERGIADIR)/hardware/msp430/boards.txt)" ""
+ifndef BOARDFAMILY
+BOARDFAMILY := lm4f
+endif
+ifeq "$(wildcard $(ENERGIADIR)/hardware/$(BOARDFAMILY)/boards.txt)" ""
 $(error ENERGIADIR is not set correctly; energia software not found)
 endif
 
 # default arduino version
 ARDUINOCONST ?= 101
-ENERGIACONST ?= 9
+ENERGIACONST ?= 12
 
 
 # auto mode?
@@ -144,11 +148,11 @@ SOURCES := $(INOFILE) \
 	$(wildcard $(addprefix utility/, *.c *.cc *.cpp))
 
 # automatically determine included libraries
-LIBRARIES := $(filter $(notdir $(wildcard $(HOME)/energia_sketchbook/libraries/*)), \
+LIBRARIES := $(filter $(notdir $(wildcard $(HOME)/sketchbook/libraries/*)), \
     $(shell sed -ne "s/^ *\# *include *[<\"]\(.*\)\.h[>\"]/\1/p" $(SOURCES)))
 
 # automatically determine included libraries
-LIBRARIES += $(filter $(notdir $(wildcard $(ENERGIADIR)/hardware/msp430/libraries/*)), \
+LIBRARIES += $(filter $(notdir $(wildcard $(ENERGIADIR)/hardware/$(BOARDFAMILY)/libraries/*)), \
 	$(shell sed -ne "s/^ *\# *include *[<\"]\(.*\)\.h[>\"]/\1/p" $(SOURCES)))
 
 
@@ -173,27 +177,34 @@ endif
 # software
 #CC := msp430-gcc
 
-COMPILER_PREFIX := $(ENERGIADIR)/hardware/tools/msp430/bin/
+COMPILER_PREFIX := $(ENERGIADIR)/hardware/tools/$(BOARDFAMILY)/bin/
+ifeq "$(BOARDFAMILY)" "lm4f"
+BOARD_PREFIX := arm-none-eabi-
+else
+ifeq "$(BOARDFAMILY)" "msp430"
+BOARD_PREFIX := msp430-
+endif
+endif
 
-CC := $(COMPILER_PREFIX)msp430-gcc
-CXX := $(COMPILER_PREFIX)msp430-g++
-LD := $(COMPILER_PREFIX)msp430-ld
-AR := $(COMPILER_PREFIX)msp430-ar
-OBJCOPY := $(COMPILER_PREFIX)msp430-objcopy
+CC := $(COMPILER_PREFIX)$(BOARD_PREFIX)gcc
+CXX := $(COMPILER_PREFIX)$(BOARD_PREFIX)g++
+LD := $(COMPILER_PREFIX)$(BOARD_PREFIX)ld
+AR := $(COMPILER_PREFIX)$(BOARD_PREFIX)ar
+OBJCOPY := $(COMPILER_PREFIX)$(BOARD_PREFIX)objcopy
 MSPDEBUG := $(COMPILER_PREFIX)mspdebug
-GDB := $(COMPILER_PREFIX)msp430-gdb
-MSP430SIZE := $(COMPILER_PREFIX)msp430-size
+GDB := $(COMPILER_PREFIX)$(BOARD_PREFIX)gdb
+MSP430SIZE := $(COMPILER_PREFIX)$(BOARD_PREFIX)size
 
 # files
 TARGET := $(if $(TARGET),$(TARGET),a.out)
 OBJECTS := $(addsuffix .o, $(basename $(SOURCES)))
 DEPFILES := $(patsubst %, .dep/%.dep, $(SOURCES))
-ENERGIACOREDIR := $(ENERGIADIR)/hardware/msp430/cores/msp430
+ENERGIACOREDIR := $(ENERGIADIR)/hardware/$(BOARDFAMILY)/cores/$(BOARDFAMILY)
 ENERGIALIB := .lib/arduino.a
-ENERGIALIBLIBSDIR := $(ENERGIADIR)/hardware/msp430/libraries
+ENERGIALIBLIBSDIR := $(ENERGIADIR)/hardware/$(BOARDFAMILY)/libraries
 ENERGIALIBLIBSPATH := $(foreach lib, $(LIBRARIES), \
-	 $(HOME)/energia_sketchbook/libraries/$(lib)/ $(HOME)/energia_sketchbook/libraries/$(lib)/utility/ $(ENERGIADIR)/libraries/$(lib)/ $(ENERGIADIR)/libraries/$(lib)/utility/ $(ENERGIACOREDIR)/libraries/$(lib) )
-ENERGIALIBOBJS := $(foreach dir, $(ENERGIACOREDIR) $(ENERGIALIBLIBSPATH), \
+	 $(HOME)/sketchbook/libraries/$(lib)/ $(ENERGIADIR)/libraries/$(lib)/ $(ENERGIACOREDIR)/libraries/$(lib) $(ENERGIALIBLIBSDIR)/$(lib) )
+ENERGIALIBOBJS := $(foreach dir, $(ENERGIACOREDIR) $(ENERGIALIBLIBSPATH) $(ENERGIACOREDIR)/driverlib, \
 	$(patsubst %, .lib/%.o, $(wildcard $(addprefix $(dir)/, *.c *.cpp))))
 
 
@@ -207,7 +218,7 @@ endif
 endif
 
 # obtain board parameters from the arduino boards.txt file
-BOARDS_FILE := $(ENERGIADIR)/hardware/msp430/boards.txt
+BOARDS_FILE := $(ENERGIADIR)/hardware/$(BOARDFAMILY)/boards.txt
 BOARD_BUILD_MCU := \
 	$(shell sed -ne "s/$(ENERGIABOARD).build.mcu=\(.*\)/\1/p" $(BOARDS_FILE))
 BOARD_BUILD_FCPU := \
@@ -218,6 +229,9 @@ BOARD_UPLOAD_SPEED := \
 	$(shell sed -ne "s/$(ENERGIABOARD).upload.speed=\(.*\)/\1/p" $(BOARDS_FILE))
 BOARD_UPLOAD_PROTOCOL := \
 	$(shell sed -ne "s/$(ENERGIABOARD).upload.protocol=\(.*\)/\1/p" $(BOARDS_FILE))
+BOARD_LD_SCRIPT := \
+  $(shell sed -ne "s/$(ENERGIABOARD).ldscript=\(.*\)/\1/p" $(BOARDS_FILE))
+
 
 # invalid board?
 ifeq "$(BOARD_BUILD_MCU)" ""
@@ -237,21 +251,29 @@ ifeq "$(ENERGIABOARD)" "lpmsp430f5529_25"
 	MSPDEBUG_PROTOCOL:= tilib
 endif
 
-CPPFLAGS := -Os -Wall
-CPPFLAGS += -ffunction-sections -fdata-sections
+ # /home/pborky/apps/energia/hardware/tools/lm4f/bin/arm-none-eabi-g++ -Os -nostartfiles -nostdlib -Wl,--gc-sections -T/home/pborky/apps/energia/hardware/lm4f/cores/lm4f/lm4fcpp_blizzard.ld -Wl,--entry=ResetISR -mthumb  -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -fsingle-precision-constant -o sketch_sep18a.cpp.elf  sketch_sep18a.cpp.o  .lib/arduino.a -lgcc -lc -lm -lrdimon
+
+# /home/pborky/apps/energia/hardware/tools/lm4f/bin/arm-none-eabi-g++ -c -g -Os -w -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -fsingle-precision-constant -DF_CPU=80000000L -MMD -DARDUINO=101 -DENERGIA=12 -I/home/pborky/apps/energia/hardware/lm4f/cores/lm4f -I/home/pborky/apps/energia/hardware/lm4f/variants/stellarpad  -MP -MF .dep/sketch_sep18a.ino.dep  -x c++ -include /home/pborky/apps/energia//hardware/lm4f/cores/lm4f/Arduino.h sketch_sep18a.ino -o sketch_sep18a.cpp.o
+
+CPPFLAGS := -Os -Wall -g
+CPPFLAGS +=  -fno-rtti -fno-exceptions -ffunction-sections -fdata-sections -fsingle-precision-constant  -mfloat-abi=hard -mfpu=fpv4-sp-d16
+ifeq "$(BOARDFAMILY)" "lm4f"
+CPPFLAGS += -mcpu=$(BOARD_BUILD_MCU)
+CPPFLAGS += -mthumb
+LINKFLAGS := -mcpu=$(BOARD_BUILD_MCU) -Os -nostartfiles -nostdlib -Wl,-gc-sections -T$(ENERGIACOREDIR)/$(BOARD_LD_SCRIPT) -Wl,--entry=ResetISR -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -fsingle-precision-constant 
+else
 CPPFLAGS += -mmcu=$(BOARD_BUILD_MCU)
+LINKFLAGS := -mmcu=$(BOARD_BUILD_MCU) -Os -Wl,-gc-sections,-u,main -lm
+endif
 CPPFLAGS += -DF_CPU=$(BOARD_BUILD_FCPU) -DARDUINO=$(ARDUINOCONST)  -DENERGIA=$(ENERGIACONST)
 CPPFLAGS += -I. -Iutil -Iutility -I$(ENERGIACOREDIR)
-CPPFLAGS += -I$(ENERGIADIR)/hardware/msp430/variants/$(BOARD_BUILD_VARIANT)/
-CPPFLAGS += -I$(HOME)/energia_sketchbook/hardware/msp430/variants/$(BOARD_BUILD_VARIANT)/
-CPPFLAGS += $(addprefix -I$(HOME)/energia_sketchbook/libraries/,  $(LIBRARIES))
-CPPFLAGS += $(patsubst %, -I$(HOME)/energia_sketchbook/libraries/%/utility,  $(LIBRARIES))
-CPPFLAGS += $(addprefix -I$(ENERGIADIR)/libraries/, $(LIBRARIES))
-CPPFLAGS += $(patsubst %, -I$(ENERGIADIR)/libraries/%/utility, $(LIBRARIES))
+CPPFLAGS += -I$(ENERGIADIR)/hardware/$(BOARDFAMILY)/variants/$(BOARD_BUILD_VARIANT)/
+CPPFLAGS += -I$(HOME)/energia_sketchbook/hardware/$(BOARDFAMILY)/variants/$(BOARD_BUILD_VARIANT)/
+CPPFLAGS += $(addprefix -I$(HOME)/sketchbook/libraries/,  $(LIBRARIES))
+CPPFLAGS += $(addprefix -I$(ENERGIADIR)/hardware/$(BOARDFAMILY)/libraries/, $(LIBRARIES))
 CPPDEPFLAGS = -MMD -MP -MF .dep/$<.dep
 CPPINOFLAGS := -x c++ -include $(ENERGIACOREDIR)/Arduino.h
 MSPDEBUGFLAGS :=  $(MSPDEBUG_PROTOCOL) 'erase' 'load $(TARGET).elf' 'exit'
-LINKFLAGS := -mmcu=$(BOARD_BUILD_MCU) -Os -Wl,-gc-sections,-u,main -lm
 
 # figure out which arg to use with stty
 STTYFARG := $(shell stty --help > /dev/null 2>&1 && echo -F || echo -f)
@@ -306,7 +328,7 @@ debug:
 
 
 $(TARGET).elf: $(ENERGIALIB) $(OBJECTS)
-	$(CC) $(LINKFLAGS) $(OBJECTS) $(ENERGIALIB) -o $@
+	$(CXX) $(LINKFLAGS) $(OBJECTS) $(ENERGIALIB) -o $@ -lgcc -lc -lm -lrdimon
 
 %.o: %.c
 	mkdir -p .dep/$(dir $<)
